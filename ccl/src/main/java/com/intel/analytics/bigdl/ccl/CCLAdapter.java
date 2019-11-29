@@ -61,6 +61,7 @@ public class CCLAdapter{
     public static native void finalizeCCL();
     public static native void setEnv(String apiServer, int nNodes);
     private static native long createCommunicator(int color);
+    private static native void releaseCommunicator(long ptr);
     private static native long allReduceFloat(long comm, float[] sendBuf, int sendOffset, float[] recvBuf, int recvOffset, int len);
     private static native long allReduceFloatAsync(long comm, String tensorName, float[] sendBuf, int sendOffset, int len);
     private static native long createTensorCache(long comm, String tensorName, int len);
@@ -77,6 +78,13 @@ public class CCLAdapter{
     }
     public long allReduceFloat(float[] sendBuf, int sendOffset, float[] recvBuf, int recvOffset, int len) {
         return CCLAdapter.allReduceFloat(ptrComm, sendBuf, sendOffset, recvBuf, recvOffset, len);
+    }
+
+    public void release() {
+        if (ptrComm != 0) {
+            releaseCommunicator(ptrComm);
+        }
+        ptrComm = 0;
     }
 
     public static class RequestInfo {

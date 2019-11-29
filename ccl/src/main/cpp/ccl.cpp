@@ -8,20 +8,42 @@
 size_t cclRank = -1, cclSize = -1;
 using namespace ccl;
 
-struct JNICCLRequest;
+// a base class for CCL related memory
+// it contains a checker to prevent use-after-free and double-free
+template <int ID>
+struct __CCLObject {
+    // FREE_CHECKING_MAGIC = hash(line_number)
+    static constexpr int FREE_CHECKING_MAGIC = int(0x2a9d8c5bL * ID) ^ ID ^ (ID << 16);
+    ~__CCLObject()
+    {
+        checkIsFreed();
+        free_check = 0;
+    }
 
-struct CCLTensorCache
+    void checkIsFreed() {
+        assert(FREE_CHECKING_MAGIC == free_check);
+    }
+private:
+    int free_check = FREE_CHECKING_MAGIC;
+
+};
+
+#define CCLBase __CCLObject<__LINE__>
+
+struct CCLRequest;
+
+struct CCLTensorCache : CCLBase
 {
     std::string name;
     jint len;
-    std::unique_ptr<JNICCLRequest> cached_req;
+    std::unique_ptr<CCLRequest> cached_req;
     bool free = true;
 
     CCLTensorCache(std::string&& name, jint len);
-    JNICCLRequest* getRequest();
+    CCLRequest* getRequest();
 };
 
-struct JNICCLRequest
+struct CCLRequest: CCLBase
 {
     communicator::coll_request_t req;
     std::unique_ptr<float[]> readBuf;
@@ -41,13 +63,13 @@ struct JNICCLRequest
         return name;
     }
 
-    JNICCLRequest(std::string&& name, jint len) 
+    CCLRequest(std::string&& name, jint len) 
     : len(len), name(std::move(name)), owner(nullptr)
     {
         init();
     }
 
-    JNICCLRequest(CCLTensorCache* owner, jint len) 
+    CCLRequest(CCLTensorCache* owner, jint len) 
     : len(len), owner(owner)
     {
         init();
@@ -69,25 +91,24 @@ private:
 };
 
 CCLTensorCache::CCLTensorCache(std::string&& name, jint len):
-        name(std::move(name)), len(len){
-            cached_req = std::make_unique<JNICCLRequest>(this, len);
+        name(std::move(name)), len(len)
+{
+            cached_req = std::make_unique<CCLRequest>(this, len);
 }
 
-JNICCLRequest* CCLTensorCache::getRequest()
+CCLRequest* CCLTensorCache::getRequest()
 {
     assert(this->free);
     this->free = false;
     return cached_req.get();
 }
 
-struct CCLCommunicator{
+struct CCLCommunicator: CCLBase {
     communicator_t comm;
     std::vector<std::unique_ptr<CCLTensorCache>> tensorCache;
-
+    
     CCLCommunicator(communicator_t&& comm): comm(std::move(comm))
-    {
-
-    }
+    {}
 };
 
 std::vector<std::unique_ptr<CCLCommunicator>> comm;
@@ -157,7 +178,7 @@ JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_initCCL(JNI
 }
 
 JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_finalizeCCL(JNIEnv *env, jclass cls) {
-    //ASSERTOK(ccl_finalize());
+    comm.clear();
 }
 
 JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceFloat(JNIEnv *env, jclass cls, jlong ptrComm, jfloatArray sendBuf, jint sendOff, jfloatArray recvBuf, jint recvOff, jint len){
@@ -206,7 +227,16 @@ JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_createComm
     return (jlong)ptr;
 }
 
-
+JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_releaseCommunicator(JNIEnv *env, jclass cls, jlong ptr){
+    CCLCommunicator* ths = reinterpret_cast<CCLCommunicator*>(ptr);
+    for (auto& ptr: comm) {
+        if (ptr.get() == ths) {
+            ptr = nullptr; //release
+            return;
+        }
+    }
+    assert(0 && "Cannot find the communicator to release!");
+}
 
 JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceFloatCached(JNIEnv *env, jclass cls, jlong ptrComm, jlong ptrCache, jfloatArray sendBuf, jint sendOff){
     CCLCommunicator* comm = reinterpret_cast<CCLCommunicator*>(ptrComm);
@@ -234,7 +264,7 @@ JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceF
     const char* name = env->GetStringUTFChars(tensorName, nullptr);
     std::string tname = std::string(name);
     env->ReleaseStringUTFChars(tensorName, name);
-    auto ret = new JNICCLRequest(std::move(tname), len);
+    auto ret = new CCLRequest(std::move(tname), len);
     env->GetFloatArrayRegion(sendBuf, sendOff, len, ret->readBuf.get());
     coll_attr& attr = ret->attr;
     auto req = comm->comm->allreduce(ret->readBuf.get(), ret->writeBuf.get(), len, reduction::sum, &attr);
@@ -243,20 +273,23 @@ JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceF
 }
 
 JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_waitRequest(JNIEnv *env, jclass cls, jlong ptr) {
-    JNICCLRequest* req = reinterpret_cast<JNICCLRequest*>(ptr);
+    CCLRequest* req = reinterpret_cast<CCLRequest*>(ptr);
     req->req->wait();
 }
 
 JNIEXPORT jboolean JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_testRequest(JNIEnv *env, jclass cls, jlong ptr) {
-    JNICCLRequest* req = reinterpret_cast<JNICCLRequest*>(ptr);
+    CCLRequest* req = reinterpret_cast<CCLRequest*>(ptr);
     bool ret = req->req->test();
     return ret;
 }
 
 JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_releaseRequest(JNIEnv *env, jclass cls, jlong ptr) {
-    JNICCLRequest* req = reinterpret_cast<JNICCLRequest*>(ptr);
+    CCLRequest* req = reinterpret_cast<CCLRequest*>(ptr);
     if (req->owner) //if is cached
     {
+        // check if this is freed to prevent "use-after-free"
+        req->checkIsFreed();
+        req->owner->checkIsFreed();
         req->req = nullptr; // release CCL request
         req->owner->free = true;
     }
@@ -267,6 +300,6 @@ JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_releaseRequ
 }
 
 JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_getResultFromRequest(JNIEnv *env, jclass cls, jlong ptr, jfloatArray outArray, jint offset) {
-    JNICCLRequest* req = reinterpret_cast<JNICCLRequest*>(ptr);
+    CCLRequest* req = reinterpret_cast<CCLRequest*>(ptr);
     req->finalize(env, outArray, offset);
 }
