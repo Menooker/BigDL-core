@@ -14,7 +14,7 @@ $(OUTDIR)/libccl_java.so: $(OBJECTS_DIR)/ccl.o
 		mkdir -p $(OUTDIR)
 		$(CXX) -shared -o $@ $(CPPFLAGS) -Wl,--start-group $^ -lccl -Wl,--end-group
 
-$(OBJECTS_DIR)/%.o: $(CPP_ROOT)/%.cpp
+$(OBJECTS_DIR)/%.o: $(CPP_ROOT)/%.cpp $(HEADER)
 		mkdir -p $(OBJECTS_DIR)
 		$(CXX) $(CPPFLAGS) -c $< -o $@
 

@@ -8,7 +8,7 @@ import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.ReadableByteChannel;
 
-public class CCLAdapter {
+public class CCLAdapter{
 
     private static File extract(String path) {
         try {
@@ -36,7 +36,7 @@ public class CCLAdapter {
         }
     }
 
-    static void load() {
+    public static void load() {
         System.loadLibrary("ccl");
         File tmpFile = extract("libccl_java.so");
         try {
@@ -46,7 +46,7 @@ public class CCLAdapter {
         }
     }
 
-    static void doInit()
+    public static void doInit()
     {
         initCCL();
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
@@ -62,7 +62,9 @@ public class CCLAdapter {
     public static native void setEnv(String apiServer, int nNodes);
     private static native long createCommunicator(int color);
     private static native long allReduceFloat(long comm, float[] sendBuf, int sendOffset, float[] recvBuf, int recvOffset, int len);
-    private static native long allReduceFloatAsync(long comm, float[] sendBuf, int sendOffset, int len);
+    private static native long allReduceFloatAsync(long comm, String tensorName, float[] sendBuf, int sendOffset, int len);
+    private static native long createTensorCache(long comm, String tensorName, int len);
+    private static native long allReduceFloatCached(long comm, long cache, float[] sendBuf, int sendOffset);
     private static native void waitRequest(long req);
     private static native boolean testRequest(long req);
     private static native void releaseRequest(long req);
@@ -72,7 +74,7 @@ public class CCLAdapter {
     public CCLAdapter(int color) {
         ptrComm = createCommunicator(color);
         System.out.println("Create COMM " + ptrComm );
-    } 
+    }
     public long allReduceFloat(float[] sendBuf, int sendOffset, float[] recvBuf, int recvOffset, int len) {
         return CCLAdapter.allReduceFloat(ptrComm, sendBuf, sendOffset, recvBuf, recvOffset, len);
     }
@@ -95,6 +97,7 @@ public class CCLAdapter {
             if (ptr != 0) {
                 releaseRequest(ptr);
             }
+            ptr = 0;
         }
 
         public void get(float[] buf, int offset) {
@@ -106,9 +109,19 @@ public class CCLAdapter {
         }
     }
 
-    public RequestInfo allReduceFloatAsync(float[] sendBuf, int sendOffset, int len) {
+    public long createTensorCache(String tensorName, int len) {
+        return CCLAdapter.createTensorCache(ptrComm, tensorName, len);
+    }
+
+    public RequestInfo allReduceFloatCached(long cacheId, float[] sendBuf, int sendOffset) {
         return new RequestInfo(
-                CCLAdapter.allReduceFloatAsync(ptrComm, sendBuf, sendOffset, len)
+                CCLAdapter.allReduceFloatCached(ptrComm, cacheId, sendBuf, sendOffset)
+        );
+    }
+
+    public RequestInfo allReduceFloatAsync(String name, float[] sendBuf, int sendOffset, int len) {
+        return new RequestInfo(
+                CCLAdapter.allReduceFloatAsync(ptrComm, name, sendBuf, sendOffset, len)
         );
     }
 }
