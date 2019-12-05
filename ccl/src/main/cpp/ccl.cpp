@@ -8,6 +8,23 @@
 size_t cclRank = -1, cclSize = -1;
 using namespace ccl;
 
+static inline uint16_t float2fp16(float* v)
+{
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    return *reinterpret_cast<uint16_t*>(v);
+#else
+    return *&(reinterpret_cast<uint16_t*>(v)[1]);
+#endif
+}
+
+static inline float fp162float(uint16_t v)
+{
+    static_assert(sizeof(float) == sizeof(uint32_t), "Expecting sizeof(float) == sizeof(uint32_t)");
+    uint32_t expanded = ((uint32_t)v) << 16;
+    return *reinterpret_cast<float*>(&expanded);
+}
+
+
 // a base class for CCL related memory
 // it contains a checker to prevent use-after-free and double-free
 template <int ID>
@@ -51,9 +68,21 @@ struct CCLRequest: CCLBase
     CCLTensorCache* owner;
     jint len;
     coll_attr attr;
+    bool isFP16 = false;
 
     void finalize(JNIEnv *env, jfloatArray recvBuf, jint recvOff) {
-        env->SetFloatArrayRegion(recvBuf, recvOff, len, writeBuf.get());
+        if (isFP16) {
+            //convert fp16 from writeBuf to fp32
+            auto fp16buffer = reinterpret_cast<uint16_t*>(writeBuf.get());
+            for (int i=0; i<len; i++) {
+               readBuf[i] = fp162float(fp16buffer[i]);
+            }
+            env->SetFloatArrayRegion(recvBuf, recvOff, len, readBuf.get());
+        }
+        else
+        {
+            env->SetFloatArrayRegion(recvBuf, recvOff, len, writeBuf.get());
+        }
     }
 
     const std::string& getName() const 
@@ -242,9 +271,31 @@ JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceF
     CCLCommunicator* comm = reinterpret_cast<CCLCommunicator*>(ptrComm);
     CCLTensorCache* cache = reinterpret_cast<CCLTensorCache*>(ptrCache);
     auto ret = cache->getRequest();
+    ret->isFP16 = false;
     env->GetFloatArrayRegion(sendBuf, sendOff, ret->len, ret->readBuf.get());
     coll_attr& attr = ret->attr;
     auto req = comm->comm->allreduce(ret->readBuf.get(), ret->writeBuf.get(), ret->len, reduction::sum, &attr);
+    ret->req = std::move(req);
+    return (jlong)ret;
+}
+
+JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceFP16Cached(JNIEnv *env, jclass cls, jlong ptrComm, jlong ptrCache, jfloatArray sendBuf, jint sendOff){
+    CCLCommunicator* comm = reinterpret_cast<CCLCommunicator*>(ptrComm);
+    CCLTensorCache* cache = reinterpret_cast<CCLTensorCache*>(ptrCache);
+    auto ret = cache->getRequest();
+    ret->isFP16 = true;
+    auto buffer = ret->readBuf.get();
+    auto fp16buffer = reinterpret_cast<uint16_t*>(buffer);
+    //copy floats to the buffer
+    env->GetFloatArrayRegion(sendBuf, sendOff, ret->len, buffer);
+    //now in-place convert them to fp16
+    for (int i = 0; i < ret->len; i++){
+        uint16_t data = float2fp16(buffer + i);
+        fp16buffer[i] = data;
+    }
+    coll_attr& attr = ret->attr;
+    auto req = comm->comm->allreduce(reinterpret_cast<void*>(buffer), reinterpret_cast<void*>(ret->writeBuf.get()),
+        ret->len, ccl::data_type::dt_bfp16, reduction::sum, &attr);
     ret->req = std::move(req);
     return (jlong)ret;
 }

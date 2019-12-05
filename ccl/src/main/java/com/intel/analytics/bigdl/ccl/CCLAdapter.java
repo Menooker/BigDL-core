@@ -66,6 +66,7 @@ public class CCLAdapter{
     private static native long allReduceFloatAsync(long comm, String tensorName, float[] sendBuf, int sendOffset, int len);
     private static native long createTensorCache(long comm, String tensorName, int len);
     private static native long allReduceFloatCached(long comm, long cache, float[] sendBuf, int sendOffset);
+    private static native long allReduceFP16Cached(long comm, long cache, float[] sendBuf, int sendOffset);
     private static native void waitRequest(long req);
     private static native boolean testRequest(long req);
     private static native void releaseRequest(long req);
@@ -124,6 +125,12 @@ public class CCLAdapter{
     public RequestInfo allReduceFloatCached(long cacheId, float[] sendBuf, int sendOffset) {
         return new RequestInfo(
                 CCLAdapter.allReduceFloatCached(ptrComm, cacheId, sendBuf, sendOffset)
+        );
+    }
+
+    public RequestInfo allReduceFP16Cached(long cacheId, float[] sendBuf, int sendOffset) {
+        return new RequestInfo(
+                CCLAdapter.allReduceFP16Cached(ptrComm, cacheId, sendBuf, sendOffset)
         );
     }
 
