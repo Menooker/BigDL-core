@@ -267,19 +267,20 @@ JNIEXPORT void JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_releaseComm
     assert(0 && "Cannot find the communicator to release!");
 }
 
-JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceFloatCached(JNIEnv *env, jclass cls, jlong ptrComm, jlong ptrCache, jfloatArray sendBuf, jint sendOff){
+JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceFloatCached(JNIEnv *env, jclass cls, jlong ptrComm, jlong ptrCache, jfloatArray sendBuf, jint sendOff, jint priority){
     CCLCommunicator* comm = reinterpret_cast<CCLCommunicator*>(ptrComm);
     CCLTensorCache* cache = reinterpret_cast<CCLTensorCache*>(ptrCache);
     auto ret = cache->getRequest();
     ret->isFP16 = false;
     env->GetFloatArrayRegion(sendBuf, sendOff, ret->len, ret->readBuf.get());
     coll_attr& attr = ret->attr;
+    attr.priority = priority;
     auto req = comm->comm->allreduce(ret->readBuf.get(), ret->writeBuf.get(), ret->len, reduction::sum, &attr);
     ret->req = std::move(req);
     return (jlong)ret;
 }
 
-JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceFP16Cached(JNIEnv *env, jclass cls, jlong ptrComm, jlong ptrCache, jfloatArray sendBuf, jint sendOff){
+JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceFP16Cached(JNIEnv *env, jclass cls, jlong ptrComm, jlong ptrCache, jfloatArray sendBuf, jint sendOff, jint priority){
     CCLCommunicator* comm = reinterpret_cast<CCLCommunicator*>(ptrComm);
     CCLTensorCache* cache = reinterpret_cast<CCLTensorCache*>(ptrCache);
     auto ret = cache->getRequest();
@@ -294,6 +295,7 @@ JNIEXPORT jlong JNICALL Java_com_intel_analytics_bigdl_ccl_CCLAdapter_allReduceF
         fp16buffer[i] = data;
     }
     coll_attr& attr = ret->attr;
+    attr.priority = priority;
     auto req = comm->comm->allreduce(reinterpret_cast<void*>(buffer), reinterpret_cast<void*>(ret->writeBuf.get()),
         ret->len, ccl::data_type::dt_bfp16, reduction::sum, &attr);
     ret->req = std::move(req);
